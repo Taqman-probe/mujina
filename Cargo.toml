@@ -1,0 +1,30 @@
+[package]
+name = "mujina"
+version = "0.1.0"
+edition = "2024"
+authors = ["Taqman-probe"]
+description = "A Cargo subcommand to temporarily patch workspace dependencies for local plugin development"
+readme = "README.md"
+license = "Apache-2.0"
+repository = "https://github.com/Taqman-probe/cargo-mujina"
+keywords = ["cargo", "subcommand", "patch", "workspace", "plugin"]
+categories = ["development-tools::cargo-plugins"]
+
+[[bin]]
+name = "cargo-mujina"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+toml_edit = "0.22"
+glob = "0.3"
+tempfile = "3"
+anyhow = "1.0"
