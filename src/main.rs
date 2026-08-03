@@ -69,8 +69,8 @@ impl Commands {
             Commands::Test(_) => Some("test"),
             Commands::Tree(_) => Some("tree"),
             Commands::Vendor(_) => Some("vendor"),
-            Commands::Edit(_) => Some("edit"),
-            Commands::Restore(_) => Some("restore"),
+            Commands::Edit(_) => None,
+            Commands::Restore(_) => None,
         }
     }
 

@@ -1,0 +1,42 @@
+name: cargo-mujina patch & run
+
+on:
+  workflow_dispatch:
+    inputs:
+      core-repo:
+        description: 'Core (host) repository URL'
+        required: true
+        default: 'https://github.com/Taqman-probe/mujina.git'
+      core-ref:
+        description: 'Branch/tag of core-repo (leave empty for the default branch)'
+        required: false
+        default: ''
+      patches:
+        description: >-
+          Replacement repos as "<git-url>@<branch>", separated by ";" (or a newline).
+          Example: https://github.com/your-org/plugin-a.git@feature-x;https://github.com/your-org/plugin-b.git@main
+        required: true
+      command:
+        description: 'cargo subcommand to run (build / test / check / run / ...). Do not use "edit".'
+        required: false
+        default: 'build'
+      args:
+        description: 'Extra args forwarded after `--` to the cargo subcommand'
+        required: false
+        default: ''
+
+jobs:
+  patch-and-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+
+      - name: Patch and run via cargo-mujina
+        uses: ./.github/actions/mujina-patch-run
+        with:
+          core-repo: ${{ inputs.core-repo }}
+          core-ref: ${{ inputs.core-ref }}
+          patches: ${{ inputs.patches }}
+          command: ${{ inputs.command }}
+          args: ${{ inputs.args }}

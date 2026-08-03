@@ -1,0 +1,183 @@
+name: 'cargo-mujina patch & run'
+description: >-
+  Installs a prebuilt cargo-mujina binary, clones a "core" repository plus one or more
+  git+branch "replacement" repositories, and runs a cargo-mujina subcommand against the
+  patched workspace. Intended for workflow_dispatch use where contributors specify
+  repo/branch pairs on the Actions page (no local `path =` patches, since everything here
+  is a fresh clone).
+
+inputs:
+  core-repo:
+    description: 'Git URL of the core (host) repository to check out and run cargo-mujina in.'
+    required: true
+  core-ref:
+    description: 'Branch, tag, or commit SHA of core-repo to check out. Leave empty for the default branch.'
+    required: false
+    default: ''
+  patches:
+    description: >-
+      One or more "<git-url>@<branch>" entries specifying repositories to substitute in via
+      `-W '{ git = "...", branch = "..." }'`. Separate multiple entries with a newline or a
+      semicolon (;), e.g.
+      "https://github.com/org/repoA.git@feature-x;https://github.com/org/repoB.git@main"
+    required: true
+  command:
+    description: >-
+      cargo subcommand to run after patching (build, test, check, run, bench, clippy, doc,
+      fetch, metadata, miri, rustc, rustdoc, tree, vendor). NOTE: do not use "edit" here —
+      cargo-mujina v0.1.0 has a bug where the `edit` subcommand tries to also invoke a
+      (nonexistent) `cargo edit` and fails, even though the Cargo.toml patch itself was
+      already applied successfully.
+    required: false
+    default: 'build'
+  args:
+    description: 'Extra arguments to forward to the cargo subcommand, placed after `--`.'
+    required: false
+    default: ''
+  version:
+    description: 'cargo-mujina release tag to install.'
+    required: false
+    default: 'v0.1.0'
+  working-directory:
+    description: 'Local directory to clone core-repo into.'
+    required: false
+    default: 'workspace'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install cargo-mujina
+      shell: bash
+      env:
+        MUJINA_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+
+        base_url="https://github.com/Taqman-probe/mujina/releases/download/${MUJINA_VERSION}"
+
+        case "${RUNNER_OS}-${RUNNER_ARCH}" in
+          Linux-X64)
+            asset="cargo-mujina-x86_64-unknown-linux-gnu.tar.gz"
+            ;;
+          macOS-X64)
+            asset="cargo-mujina-x86_64-apple-darwin.tar.gz"
+            ;;
+          macOS-ARM64)
+            asset="cargo-mujina-aarch64-apple-darwin.tar.gz"
+            ;;
+          Windows-X64)
+            asset="cargo-mujina-x86_64-pc-windows-msvc.zip"
+            ;;
+          *)
+            echo "::error::No prebuilt cargo-mujina binary is published for RUNNER_OS=${RUNNER_OS} RUNNER_ARCH=${RUNNER_ARCH}." >&2
+            exit 1
+            ;;
+        esac
+
+        # RUNNER_TEMP is a native Windows path (e.g. D:\a\_temp) on Windows runners.
+        # Normalize it to a POSIX-style path for our own bash/find/tar usage via cygpath,
+        # which ships with Git for Windows' Git Bash. On Linux/macOS this is a no-op passthrough.
+        to_posix_path() {
+          if command -v cygpath >/dev/null 2>&1; then
+            cygpath -u "$1"
+          else
+            printf '%s' "$1"
+          fi
+        }
+
+        install_dir="$(to_posix_path "${RUNNER_TEMP}")/cargo-mujina-install"
+        mkdir -p "${install_dir}"
+
+        curl --fail --location --show-error \
+          --output "${install_dir}/${asset}" \
+          "${base_url}/${asset}"
+
+        (
+          cd "${install_dir}"
+          case "${asset}" in
+            *.tar.gz)
+              tar -xzf "${asset}"
+              ;;
+            *.zip)
+              if command -v unzip >/dev/null 2>&1; then
+                unzip -o "${asset}"
+              else
+                powershell -NoProfile -Command "Expand-Archive -Path '${asset}' -DestinationPath '.' -Force"
+              fi
+              ;;
+          esac
+        )
+
+        binary_path="$(find "${install_dir}" -maxdepth 1 -type f \( -name 'cargo-mujina' -o -name 'cargo-mujina.exe' \) | head -n1)"
+        if [ -z "${binary_path}" ]; then
+          echo "::error::Could not find the cargo-mujina binary after extracting ${asset}" >&2
+          exit 1
+        fi
+        chmod +x "${binary_path}" || true
+
+        bin_dir="$(dirname "${binary_path}")"
+        if command -v cygpath >/dev/null 2>&1; then
+          cygpath -w "${bin_dir}" >> "${GITHUB_PATH}"
+        else
+          printf '%s\n' "${bin_dir}" >> "${GITHUB_PATH}"
+        fi
+
+    - name: Check out core repository
+      shell: bash
+      env:
+        CORE_REPO: ${{ inputs.core-repo }}
+        CORE_REF: ${{ inputs.core-ref }}
+        TARGET_DIR: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+
+        rm -rf "${TARGET_DIR}"
+
+        if [ -n "${CORE_REF}" ]; then
+          git clone --depth 1 --branch "${CORE_REF}" "${CORE_REPO}" "${TARGET_DIR}"
+        else
+          git clone --depth 1 "${CORE_REPO}" "${TARGET_DIR}"
+        fi
+
+    - name: Run cargo-mujina
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PATCHES: ${{ inputs.patches }}
+        COMMAND: ${{ inputs.command }}
+        EXTRA_ARGS: ${{ inputs.args }}
+      run: |
+        set -euo pipefail
+
+        normalized="$(printf '%s' "${PATCHES}" | tr ';' '\n')"
+
+        with_args=()
+        while IFS= read -r line; do
+          # trim surrounding whitespace
+          line="$(printf '%s' "${line}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          [ -z "${line}" ] && continue
+
+          url="${line%@*}"
+          branch="${line##*@}"
+
+          if [ -z "${url}" ] || [ -z "${branch}" ] || [ "${url}" = "${line}" ]; then
+            echo "::error::Invalid 'patches' entry (expected <git-url>@<branch>): ${line}" >&2
+            exit 1
+          fi
+
+          with_args+=( -W "{ git = \"${url}\", branch = \"${branch}\" }" )
+        done <<< "${normalized}"
+
+        if [ "${#with_args[@]}" -eq 0 ]; then
+          echo "::error::No valid entries found in the 'patches' input" >&2
+          exit 1
+        fi
+
+        extra_args=()
+        if [ -n "${EXTRA_ARGS}" ]; then
+          # shellcheck disable=SC2206
+          extra_args=( -- ${EXTRA_ARGS} )
+        fi
+
+        echo "Running: cargo-mujina ${COMMAND} ${with_args[*]} ${extra_args[*]}"
+        cargo-mujina "${COMMAND}" "${with_args[@]}" "${extra_args[@]}"
