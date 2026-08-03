@@ -3,10 +3,19 @@ name: cargo-mujina patch & run
 on:
   workflow_dispatch:
     inputs:
+      os:
+        description: 'OS to build/run on'
+        required: false
+        type: choice
+        default: 'ubuntu-latest'
+        options:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
       core-repo:
         description: 'Core (host) repository URL'
         required: true
-        default: 'https://github.com/Taqman-probe/mujina.git'
+        default: ''
       core-ref:
         description: 'Branch/tag of core-repo (leave empty for the default branch)'
         required: false
@@ -24,19 +33,32 @@ on:
         description: 'Extra args forwarded after `--` to the cargo subcommand'
         required: false
         default: ''
+      artifact-path:
+        description: >-
+          Path (relative to the repo root) of the build output to upload as a downloadable
+          artifact, e.g. "workspace/target/debug/mybinary" or a glob like
+          "workspace/target/release/*". Leave empty to skip uploading (e.g. for `test`/`check`,
+          where there's nothing meaningful to grab afterward).
+        required: false
+        default: ''
 
 jobs:
   patch-and-run:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     steps:
-      - name: Check out this repository
-        uses: actions/checkout@v4
-
       - name: Patch and run via cargo-mujina
-        uses: ./.github/actions/mujina-patch-run
+        uses: Taqman-probe/mujina/.github/actions/cargo-mujina-build@main
         with:
           core-repo: ${{ inputs.core-repo }}
           core-ref: ${{ inputs.core-ref }}
           patches: ${{ inputs.patches }}
           command: ${{ inputs.command }}
           args: ${{ inputs.args }}
+
+      - name: Upload build artifact
+        if: ${{ inputs.artifact-path != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: ${{ inputs.artifact-path }}
+          if-no-files-found: error
