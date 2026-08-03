@@ -110,6 +110,118 @@ When you are done with local testing, restore your original configuration:
 cargo mujina restore
 ```
 
+## Quick Start for Non-Developers (GitHub Actions)
+
+If you don't want to install a Rust toolchain or use the CLI directly, `cargo-mujina` also ships
+as a GitHub Actions composite action. It downloads a prebuilt `cargo-mujina` binary, clones your
+core repository plus one or more replacement repositories, runs a cargo command, and lets you
+download the result — all from the Actions tab, with no local setup.
+
+### One-time setup
+
+Add the following workflow file to the repository you want to build/test from
+(`sample/mujina-dispatch.yml`). No other files are needed in that repository — the
+action itself lives in this `cargo-mujina` repository and is referenced remotely, so there's
+nothing to copy in and no `actions/checkout` step required.
+
+```yaml
+name: cargo-mujina patch & run
+
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        description: 'OS to build/run on'
+        required: false
+        type: choice
+        default: 'ubuntu-latest'
+        options:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+      core-repo:
+        description: 'Core (host) repository URL'
+        required: true
+        default: ''
+      core-ref:
+        description: 'Branch/tag of core-repo (leave empty for the default branch)'
+        required: false
+        default: ''
+      patches:
+        description: >-
+          Replacement repos as "<git-url>@<branch>", separated by ";" (or a newline).
+          Example: https://github.com/your-org/plugin-a.git@feature-x;https://github.com/your-org/plugin-b.git@main
+        required: true
+      command:
+        description: 'cargo subcommand to run (build / test / check / run / ...). Do not use "edit".'
+        required: false
+        default: 'build'
+      args:
+        description: 'Extra args forwarded after `--` to the cargo subcommand'
+        required: false
+        default: ''
+      artifact-path:
+        description: >-
+          Path (relative to the repo root) of the build output to upload as a downloadable
+          artifact, e.g. "workspace/target/debug/mybinary" or a glob like
+          "workspace/target/release/*". Leave empty to skip uploading (e.g. for `test`/`check`,
+          where there's nothing meaningful to grab afterward).
+        required: false
+        default: ''
+
+jobs:
+  patch-and-run:
+    runs-on: ${{ inputs.os }}
+    steps:
+      - name: Patch and run via cargo-mujina
+        uses: Taqman-probe/mujina/.github/actions/cargo-mujina-build@main
+        with:
+          core-repo: ${{ inputs.core-repo }}
+          core-ref: ${{ inputs.core-ref }}
+          patches: ${{ inputs.patches }}
+          command: ${{ inputs.command }}
+          args: ${{ inputs.args }}
+
+      - name: Upload build artifact
+        if: ${{ inputs.artifact-path != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: ${{ inputs.artifact-path }}
+          if-no-files-found: error
+
+```
+
+Commit and push this one file. That's the entire setup.
+
+### Running it
+
+1. Go to the **Actions** tab of the repository → select **"cargo-mujina patch & run"** in the
+   left sidebar → click **"Run workflow"**.
+2. Fill in the inputs:
+   - **os**: the target OS (`ubuntu-latest` / `windows-latest` / `macos-latest`).
+   - **core-repo** / **core-ref**: the Git URL and branch of the host project.
+   - **patches**: one or more `<git-url>@<branch>` entries for the crates you want to swap in,
+     separated by `;` or a newline.
+   - **command**: the cargo subcommand to run (`build`, `test`, `check`, `run`, ...). Avoid
+     `edit`.
+   - **artifact-path**: set this if you want to download the result afterward, e.g.
+     `workspace/target/debug/<binary-name>` (`...\<binary-name>.exe` on Windows).
+3. Click **"Run workflow"** and wait for it to finish.
+4. If `artifact-path` was set, open the completed run's summary page — there's an **Artifacts**
+   section near the bottom with a downloadable zip.
+
+### After downloading a Linux/macOS binary
+
+The downloaded artifact is always a `.zip`, even for a Linux/macOS binary, and the execute bit is
+often lost along the way. After unzipping:
+
+```sh
+unzip build-output.zip
+chmod +x ./<binary-name>
+./<binary-name>
+```
+
 ## For Plugin Developers: Precautions When Using `inventory`
 
 Even if you add a crate to register a plugin using `inventory::submit!`, it won’t work on its own. If that crate isn’t `use`d anywhere, the linker will determine that it is “unused” and remove the entire crate—including its static initializers—which may prevent the registration with `inventory` from being executed at all.
